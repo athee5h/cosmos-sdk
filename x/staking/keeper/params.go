@@ -65,5 +65,6 @@ func (k Keeper) GetParams(ctx sdk.Context) types.Params {
 
 // set the params
 func (k Keeper) SetParams(ctx sdk.Context, params types.Params) {
+	fmt.Println("called with params", types.Params{})
 	k.paramstore.SetParamSet(ctx, &params)
 }
