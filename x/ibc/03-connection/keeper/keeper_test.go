@@ -183,8 +183,11 @@ func (chain *TestChain) CreateClient(client *TestChain) error {
 	client.App.StakingKeeper.SetHistoricalInfo(ctxClient, client.Header.Height, histInfo)
 
 	// also set staking params
-	stakingParams := staking.DefaultParams()
-	stakingParams.HistoricalEntries = 10
+	stakingParams := client.App.StakingKeeper.GetParams(ctxClient)
+	if stakingParams.BondDenom == "" {
+		stakingParams = staking.DefaultParams()
+		stakingParams.HistoricalEntries = 10
+	}
 	client.App.StakingKeeper.SetParams(ctxClient, stakingParams)
 
 	// Create target ctx

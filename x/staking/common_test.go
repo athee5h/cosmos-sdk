@@ -1,6 +1,7 @@
 package staking_test
 
 import (
+	"fmt"
 	abci "github.com/tendermint/tendermint/abci/types"
 	"github.com/tendermint/tendermint/crypto"
 	"github.com/tendermint/tendermint/crypto/secp256k1"
@@ -52,7 +53,14 @@ func getBaseSimappWithCustomKeeper() (*codec.Codec, *simapp.SimApp, sdk.Context)
 		app.SupplyKeeper,
 		app.GetSubspace(staking.ModuleName),
 	)
-	app.StakingKeeper.SetParams(ctx, types.DefaultParams())
+	stakingParams := app.StakingKeeper.GetParams(ctx)
+
+	fmt.Println("calling common test", stakingParams)
+	if stakingParams.BondDenom == "" {
+		stakingParams = types.DefaultParams()
+	}
+
+	app.StakingKeeper.SetParams(ctx, stakingParams)
 
 	return codec.New(), app, ctx
 }
