@@ -1142,11 +1142,11 @@ func (m *Redelegation) GetEntries() []RedelegationEntry {
 
 // Params defines the parameters for the staking module.
 type Params struct {
-	UnbondingTime     time.Duration `protobuf:"bytes,1,opt,name=unbonding_time,json=unbondingTime,proto3,stdduration" json:"unbonding_time" yaml:"unbonding_time"`
-	MaxValidators     uint32        `protobuf:"varint,2,opt,name=max_validators,json=maxValidators,proto3" json:"max_validators,omitempty" yaml:"max_validators"`
-	MaxEntries        uint32        `protobuf:"varint,3,opt,name=max_entries,json=maxEntries,proto3" json:"max_entries,omitempty" yaml:"max_entries"`
-	HistoricalEntries uint32        `protobuf:"varint,4,opt,name=historical_entries,json=historicalEntries,proto3" json:"historical_entries,omitempty" yaml:"historical_entries"`
-	BondDenom         string        `protobuf:"bytes,5,opt,name=bond_denom,json=bondDenom,proto3" json:"bond_denom,omitempty" yaml:"bond_denom"`
+	UnbondingTime     time.Duration `protobuf:"bytes,1,opt,name=unbonding_time,json=unbonding_time,proto3,stdduration" json:"unbonding_time" yaml:"unbonding_time"`
+	MaxValidators     uint32        `protobuf:"varint,2,opt,name=max_validators,json=max_validators,proto3" json:"max_validators,omitempty" yaml:"max_validators"`
+	MaxEntries        uint32        `protobuf:"varint,3,opt,name=max_entries,json=max_entries,proto3" json:"max_entries,omitempty" yaml:"max_entries"`
+	HistoricalEntries uint32        `protobuf:"varint,4,opt,name=historical_entries,json=historical_entries,proto3" json:"historical_entries,omitempty" yaml:"historical_entries"`
+	BondDenom         string        `protobuf:"bytes,5,opt,name=bond_denom,json=bond_denom,proto3" json:"bond_denom,omitempty" yaml:"bond_denom"`
 }
 
 func (m *Params) Reset()      { *m = Params{} }
