@@ -1,6 +1,7 @@
 package keeper
 
 import (
+	"fmt"
 	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -52,6 +53,7 @@ func (k Keeper) BondDenom(ctx sdk.Context) (res string) {
 
 // Get all parameteras as types.Params
 func (k Keeper) GetParams(ctx sdk.Context) types.Params {
+	fmt.Println("validators in store", k.MaxValidators(ctx), "denom", k.BondDenom(ctx))
 	return types.NewParams(
 		k.UnbondingTime(ctx),
 		k.MaxValidators(ctx),
