@@ -2,6 +2,7 @@ package types
 
 import (
 	"context"
+	"time"
 
 	st "cosmossdk.io/api/cosmos/staking/v1beta1"
 	"cosmossdk.io/core/address"
@@ -16,6 +17,7 @@ type AccountKeeper interface {
 	AddressCodec() address.Codec
 
 	GetAccount(ctx context.Context, addr sdk.AccAddress) sdk.AccountI // only used for simulation
+	HasAccount(ctx context.Context, addr sdk.AccAddress) bool
 
 	GetModuleAddress(name string) sdk.AccAddress
 	GetModuleAccount(ctx context.Context, moduleName string) sdk.ModuleAccountI
@@ -35,8 +37,8 @@ type BankKeeper interface {
 
 	SendCoinsFromAccountToModule(ctx context.Context, senderAddr sdk.AccAddress, recipientModule string, amt sdk.Coins) error
 	SendCoinsFromModuleToModule(ctx context.Context, senderPool, recipientPool string, amt sdk.Coins) error
-	UndelegateCoinsFromModuleToAccount(ctx context.Context, senderModule string, recipientAddr sdk.AccAddress, amt sdk.Coins) (sdk.Coins, sdk.Coins, error)
-	DelegateCoinsFromAccountToModule(ctx context.Context, senderAddr sdk.AccAddress, recipientModule string, amt sdk.Coins) (sdk.Coins, sdk.Coins, error)
+	UndelegateCoinsFromModuleToAccount(ctx context.Context, senderModule string, recipientAddr sdk.AccAddress, amt sdk.Coins) error
+	DelegateCoinsFromAccountToModule(ctx context.Context, senderAddr sdk.AccAddress, recipientModule string, amt sdk.Coins) error
 
 	BurnCoins(context.Context, []byte, sdk.Coins) error
 	IsSendEnabledDenom(ctx context.Context, denom string) bool
@@ -117,4 +119,16 @@ func (StakingHooksWrapper) IsOnePerModuleType() {}
 
 type ConsensusKeeper interface {
 	ValidatorPubKeyTypes(context.Context) ([]string, error)
+}
+
+type VestingAccount interface {
+	// TrackDelegation performs internal vesting accounting necessary when
+	// delegating from a vesting account. It accepts the current block time, the
+	// delegation amount and balance of all coins whose denomination exists in
+	// the account's original vesting balance.
+	TrackDelegation(blockTime time.Time, balance, amount sdk.Coins) (sdk.Coins, sdk.Coins)
+
+	// TrackUndelegation performs internal vesting accounting necessary when a
+	// vesting account performs an undelegation.
+	TrackUndelegation(amount sdk.Coins) (sdk.Coins, sdk.Coins)
 }

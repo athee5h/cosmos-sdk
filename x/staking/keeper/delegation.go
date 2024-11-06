@@ -713,8 +713,12 @@ func (k Keeper) Delegate(
 	if err != nil {
 		return math.LegacyZeroDec(), err
 	}
+	bondDenom, err := k.BondDenom(ctx)
+	if err != nil {
+		return math.LegacyDec{}, err
+	}
 
-	var delVest, delNonVest sdk.Coins
+	delVest, delNonVest := sdk.NewCoins(), sdk.NewCoins(sdk.NewCoin(bondDenom, bondAmt))
 
 	// if subtractAccount is true then we are
 	// performing a delegation and not a redelegation, thus the source tokens are
@@ -735,13 +739,21 @@ func (k Keeper) Delegate(
 			return math.LegacyZeroDec(), fmt.Errorf("invalid validator status: %v", validator.Status)
 		}
 
-		bondDenom, err := k.BondDenom(ctx)
-		if err != nil {
-			return math.LegacyDec{}, err
+		coins := sdk.NewCoins(sdk.NewCoin(bondDenom, bondAmt))
+
+		acc := k.authKeeper.GetAccount(ctx, delAddr)
+		if acc == nil {
+			return math.LegacyZeroDec(), errorsmod.Wrapf(sdkerrors.ErrUnknownAddress, "account %s does not exist", delAddr)
 		}
 
-		coins := sdk.NewCoins(sdk.NewCoin(bondDenom, bondAmt))
-		delVest, delNonVest, err = k.bankKeeper.DelegateCoinsFromAccountToModule(ctx, delAddr, sendName, coins)
+		balances := k.bankKeeper.GetAllBalances(ctx, delAddr)
+
+		vacc, ok := acc.(types.VestingAccount)
+		if ok {
+			delVest, delNonVest = vacc.TrackDelegation(k.HeaderService.HeaderInfo(ctx).Time, balances, coins)
+		}
+
+		err = k.bankKeeper.DelegateCoinsFromAccountToModule(ctx, delAddr, sendName, coins)
 		if err != nil {
 			return math.LegacyDec{}, err
 		}
@@ -863,13 +875,41 @@ func (k Keeper) Unbond(
 		return amount, err
 	}
 
+	unbondAmt := validator.TokensFromShares(shares)
+
 	// subtract shares from delegation
 	delegation.Shares = delegation.Shares.Sub(shares)
+	effectiveDelegatorShares := shares
 
 	delegatorAddress, err := k.authKeeper.AddressCodec().StringToBytes(delegation.DelegatorAddress)
 	if err != nil {
 		return amount, err
 	}
+
+	bondDenom, err := k.BondDenom(ctx)
+	if err != nil {
+		return amount, err
+	}
+
+	acc := k.authKeeper.GetAccount(ctx, delegatorAddress)
+	if acc == nil {
+		return amount, errorsmod.Wrapf(sdkerrors.ErrUnknownAddress, "account %s does not exist", delAddr)
+	}
+
+	vacc, ok := acc.(types.VestingAccount)
+	if ok {
+		vest, nonVest := vacc.TrackUndelegation(sdk.NewCoins(sdk.NewCoin(bondDenom, unbondAmt.TruncateInt())))
+
+		effectiveDelegatorShares, err = k.calculateEffectiveDelegationShares(vest, nonVest, validator)
+		if err != nil {
+			return amount, err
+		}
+	}
+
+	// safesub
+	validator.EffectiveDelegatorShares = validator.EffectiveDelegatorShares.Sub(effectiveDelegatorShares)
+	// safesub
+	delegation.EffectiveShares = delegation.EffectiveShares.Sub(effectiveDelegatorShares)
 
 	valbz, err := k.ValidatorAddressCodec().StringToBytes(validator.GetOperator())
 	if err != nil {
@@ -1043,16 +1083,6 @@ func (k Keeper) CompleteUnbonding(ctx context.Context, delAddr sdk.AccAddress, v
 		return nil, err
 	}
 
-	validator, err := k.GetValidator(ctx, valAddr)
-	if err != nil {
-		return nil, err
-	}
-
-	delegation, err := k.Delegations.Get(ctx, collections.Join(delAddr, valAddr))
-	if err != nil {
-		return nil, err
-	}
-
 	// loop through all the entries and complete unbonding mature entries
 	for i := 0; i < len(ubd.Entries); i++ {
 		entry := ubd.Entries[i]
@@ -1066,25 +1096,7 @@ func (k Keeper) CompleteUnbonding(ctx context.Context, delAddr sdk.AccAddress, v
 			// track undelegation only when remaining or truncated shares are non-zero
 			if !entry.Balance.IsZero() {
 				amt := sdk.NewCoin(bondDenom, entry.Balance)
-				vest, nonVest, err := k.bankKeeper.UndelegateCoinsFromModuleToAccount(ctx, types.NotBondedPoolName, delegatorAddress, sdk.NewCoins(amt))
-				if err != nil {
-					return nil, err
-				}
-
-				effectiveDelegatorShares, err := k.calculateEffectiveDelegationShares(vest, nonVest, validator)
-				if err != nil {
-					return nil, err
-				}
-
-				// TODO: safesub
-				validator.EffectiveDelegatorShares = validator.EffectiveDelegatorShares.Sub(effectiveDelegatorShares)
-				if err = k.SetValidator(ctx, validator); err != nil {
-					return nil, err
-				}
-
-				// TODO: safesub
-				delegation.EffectiveShares = delegation.EffectiveShares.Sub(effectiveDelegatorShares)
-				if err = k.SetDelegation(ctx, delegation); err != nil {
+				if err := k.bankKeeper.UndelegateCoinsFromModuleToAccount(ctx, types.NotBondedPoolName, delegatorAddress, sdk.NewCoins(amt)); err != nil {
 					return nil, err
 				}
 
