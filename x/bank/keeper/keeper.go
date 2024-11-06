@@ -41,13 +41,13 @@ type Keeper interface {
 	SendCoinsFromModuleToAccount(ctx context.Context, senderModule string, recipientAddr sdk.AccAddress, amt sdk.Coins) error
 	SendCoinsFromModuleToModule(ctx context.Context, senderModule, recipientModule string, amt sdk.Coins) error
 	SendCoinsFromAccountToModule(ctx context.Context, senderAddr sdk.AccAddress, recipientModule string, amt sdk.Coins) error
-	DelegateCoinsFromAccountToModule(ctx context.Context, senderAddr sdk.AccAddress, recipientModule string, amt sdk.Coins) error
-	UndelegateCoinsFromModuleToAccount(ctx context.Context, senderModule string, recipientAddr sdk.AccAddress, amt sdk.Coins) error
+	DelegateCoinsFromAccountToModule(ctx context.Context, senderAddr sdk.AccAddress, recipientModule string, amt sdk.Coins) (sdk.Coins, sdk.Coins, error)
+	UndelegateCoinsFromModuleToAccount(ctx context.Context, senderModule string, recipientAddr sdk.AccAddress, amt sdk.Coins) (sdk.Coins, sdk.Coins, error)
 	MintCoins(ctx context.Context, moduleName string, amt sdk.Coins) error
 	BurnCoins(ctx context.Context, address []byte, amt sdk.Coins) error
 
-	DelegateCoins(ctx context.Context, delegatorAddr, moduleAccAddr sdk.AccAddress, amt sdk.Coins) error
-	UndelegateCoins(ctx context.Context, moduleAccAddr, delegatorAddr sdk.AccAddress, amt sdk.Coins) error
+	DelegateCoins(ctx context.Context, delegatorAddr, moduleAccAddr sdk.AccAddress, amt sdk.Coins) (sdk.Coins, sdk.Coins, error)
+	UndelegateCoins(ctx context.Context, moduleAccAddr, delegatorAddr sdk.AccAddress, amt sdk.Coins) (sdk.Coins, sdk.Coins, error)
 
 	types.QueryServer
 }
@@ -115,14 +115,14 @@ func (k BaseKeeper) WithMintCoinsRestriction(check types.MintingRestrictionFn) B
 // vesting and vested coins. The coins are then transferred from the delegator
 // address to a ModuleAccount address. If any of the delegation amounts are negative,
 // an error is returned.
-func (k BaseKeeper) DelegateCoins(ctx context.Context, delegatorAddr, moduleAccAddr sdk.AccAddress, amt sdk.Coins) error {
+func (k BaseKeeper) DelegateCoins(ctx context.Context, delegatorAddr, moduleAccAddr sdk.AccAddress, amt sdk.Coins) (sdk.Coins, sdk.Coins, error) {
 	moduleAcc := k.ak.GetAccount(ctx, moduleAccAddr)
 	if moduleAcc == nil {
-		return errorsmod.Wrapf(sdkerrors.ErrUnknownAddress, "module account %s does not exist", moduleAccAddr)
+		return nil, nil, errorsmod.Wrapf(sdkerrors.ErrUnknownAddress, "module account %s does not exist", moduleAccAddr)
 	}
 
 	if !amt.IsValid() {
-		return errorsmod.Wrap(sdkerrors.ErrInvalidCoins, amt.String())
+		return nil, nil, errorsmod.Wrap(sdkerrors.ErrInvalidCoins, amt.String())
 	}
 
 	balances := sdk.NewCoins()
@@ -130,7 +130,7 @@ func (k BaseKeeper) DelegateCoins(ctx context.Context, delegatorAddr, moduleAccA
 	for _, coin := range amt {
 		balance := k.GetBalance(ctx, delegatorAddr, coin.GetDenom())
 		if balance.IsLT(coin) {
-			return errorsmod.Wrapf(
+			return nil, nil, errorsmod.Wrapf(
 				sdkerrors.ErrInsufficientFunds, "failed to delegate; %s is smaller than %s", balance, amt,
 			)
 		}
@@ -138,27 +138,34 @@ func (k BaseKeeper) DelegateCoins(ctx context.Context, delegatorAddr, moduleAccA
 		balances = balances.Add(balance)
 		err := k.setBalance(ctx, delegatorAddr, balance.Sub(coin))
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 	}
 
-	if err := k.trackDelegation(ctx, delegatorAddr, balances, amt); err != nil {
-		return errorsmod.Wrap(err, "failed to track delegation")
+	vest, nonVest, err := k.trackDelegation(ctx, delegatorAddr, balances, amt)
+	if err != nil {
+		return nil, nil, errorsmod.Wrap(err, "failed to track delegation")
 	}
+
 	// emit coin spent event
 	delAddrStr, err := k.ak.AddressCodec().BytesToString(delegatorAddr)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	if err = k.EventService.EventManager(ctx).EmitKV(
 		types.EventTypeCoinSpent,
 		event.NewAttribute(types.AttributeKeySpender, delAddrStr),
 		event.NewAttribute(sdk.AttributeKeyAmount, amt.String()),
 	); err != nil {
-		return err
+		return nil, nil, err
 	}
 
-	return k.addCoins(ctx, moduleAccAddr, amt)
+	err = k.addCoins(ctx, moduleAccAddr, amt)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return vest, nonVest, nil
 }
 
 // UndelegateCoins performs undelegation by crediting amt coins to an account with
@@ -166,25 +173,31 @@ func (k BaseKeeper) DelegateCoins(ctx context.Context, delegatorAddr, moduleAccA
 // vesting and vested coins. The coins are then transferred from a ModuleAccount
 // address to the delegator address. If any of the undelegation amounts are
 // negative, an error is returned.
-func (k BaseKeeper) UndelegateCoins(ctx context.Context, moduleAccAddr, delegatorAddr sdk.AccAddress, amt sdk.Coins) error {
+func (k BaseKeeper) UndelegateCoins(ctx context.Context, moduleAccAddr, delegatorAddr sdk.AccAddress, amt sdk.Coins) (sdk.Coins, sdk.Coins, error) {
 	moduleAcc := k.ak.GetAccount(ctx, moduleAccAddr)
 	if moduleAcc == nil {
-		return errorsmod.Wrapf(sdkerrors.ErrUnknownAddress, "module account %s does not exist", moduleAccAddr)
+		return nil, nil, errorsmod.Wrapf(sdkerrors.ErrUnknownAddress, "module account %s does not exist", moduleAccAddr)
 	}
 
 	if !amt.IsValid() {
-		return errorsmod.Wrap(sdkerrors.ErrInvalidCoins, amt.String())
+		return nil, nil, errorsmod.Wrap(sdkerrors.ErrInvalidCoins, amt.String())
 	}
 
 	if err := k.subUnlockedCoins(ctx, moduleAccAddr, amt); err != nil {
-		return err
+		return nil, nil, err
 	}
 
-	if err := k.trackUndelegation(ctx, delegatorAddr, amt); err != nil {
-		return errorsmod.Wrap(err, "failed to track undelegation")
+	vest, nonVest, err := k.trackUndelegation(ctx, delegatorAddr, amt)
+
+	if err != nil {
+		return nil, nil, errorsmod.Wrap(err, "failed to track undelegation")
 	}
 
-	return k.addCoins(ctx, delegatorAddr, amt)
+	err = k.addCoins(ctx, delegatorAddr, amt)
+	if err != nil {
+		return nil, nil, err
+	}
+	return vest, nonVest, nil
 }
 
 // GetSupply retrieves the Supply from store
@@ -297,17 +310,22 @@ func (k BaseKeeper) SendCoinsFromAccountToModule(
 // does not exist or is unauthorized.
 func (k BaseKeeper) DelegateCoinsFromAccountToModule(
 	ctx context.Context, senderAddr sdk.AccAddress, recipientModule string, amt sdk.Coins,
-) error {
+) (sdk.Coins, sdk.Coins, error) {
 	recipientAcc := k.ak.GetModuleAccount(ctx, recipientModule)
 	if recipientAcc == nil {
-		return errorsmod.Wrapf(sdkerrors.ErrUnknownAddress, "module account %s does not exist", recipientModule)
+		return nil, nil, errorsmod.Wrapf(sdkerrors.ErrUnknownAddress, "module account %s does not exist", recipientModule)
 	}
 
 	if !recipientAcc.HasPermission(authtypes.Staking) {
-		return errorsmod.Wrapf(sdkerrors.ErrUnauthorized, "module account %s does not have permissions to receive delegated coins", recipientModule)
+		return nil, nil, errorsmod.Wrapf(sdkerrors.ErrUnauthorized, "module account %s does not have permissions to receive delegated coins", recipientModule)
 	}
 
-	return k.DelegateCoins(ctx, senderAddr, recipientAcc.GetAddress(), amt)
+	vest, nonVest, err := k.DelegateCoins(ctx, senderAddr, recipientAcc.GetAddress(), amt)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return vest, nonVest, nil
 }
 
 // UndelegateCoinsFromModuleToAccount undelegates the unbonding coins and transfers
@@ -315,14 +333,14 @@ func (k BaseKeeper) DelegateCoinsFromAccountToModule(
 // module account does not exist or is unauthorized.
 func (k BaseKeeper) UndelegateCoinsFromModuleToAccount(
 	ctx context.Context, senderModule string, recipientAddr sdk.AccAddress, amt sdk.Coins,
-) error {
+) (sdk.Coins, sdk.Coins, error) {
 	acc := k.ak.GetModuleAccount(ctx, senderModule)
 	if acc == nil {
-		return errorsmod.Wrapf(sdkerrors.ErrUnknownAddress, "module account %s does not exist", senderModule)
+		return nil, nil, errorsmod.Wrapf(sdkerrors.ErrUnknownAddress, "module account %s does not exist", senderModule)
 	}
 
 	if !acc.HasPermission(authtypes.Staking) {
-		return errorsmod.Wrapf(sdkerrors.ErrUnauthorized, "module account %s does not have permissions to undelegate coins", senderModule)
+		return nil, nil, errorsmod.Wrapf(sdkerrors.ErrUnauthorized, "module account %s does not have permissions to undelegate coins", senderModule)
 	}
 
 	return k.UndelegateCoins(ctx, acc.GetAddress(), recipientAddr, amt)
@@ -429,45 +447,49 @@ func (k BaseKeeper) setSupply(ctx context.Context, coin sdk.Coin) {
 }
 
 // trackDelegation tracks the delegation of the given account if it is a vesting account
-func (k BaseKeeper) trackDelegation(ctx context.Context, addr sdk.AccAddress, balance, amt sdk.Coins) error {
+func (k BaseKeeper) trackDelegation(ctx context.Context, addr sdk.AccAddress, balance, amt sdk.Coins) (sdk.Coins, sdk.Coins, error) {
 	acc := k.ak.GetAccount(ctx, addr)
 	if acc == nil {
 		// check if it's an x/accounts smart account
 		if k.ak.HasAccount(ctx, addr) {
-			return nil
+			return sdk.NewCoins(), sdk.NewCoins(), nil
 		}
-		return errorsmod.Wrapf(sdkerrors.ErrUnknownAddress, "account %s does not exist", addr)
+		return nil, nil, errorsmod.Wrapf(sdkerrors.ErrUnknownAddress, "account %s does not exist", addr)
 	}
 
 	vacc, ok := acc.(types.VestingAccount)
 	if ok {
 		// TODO: return error on account.TrackDelegation
-		vacc.TrackDelegation(k.HeaderService.HeaderInfo(ctx).Time, balance, amt)
+		vest, nonvest := vacc.TrackDelegation(k.HeaderService.HeaderInfo(ctx).Time, balance, amt)
 		k.ak.SetAccount(ctx, acc)
+
+		return vest, nonvest, nil
 	}
 
-	return nil
+	return sdk.NewCoins(), amt, nil
 }
 
 // trackUndelegation tracks undelegation of the given account if it is a vesting account
-func (k BaseKeeper) trackUndelegation(ctx context.Context, addr sdk.AccAddress, amt sdk.Coins) error {
+func (k BaseKeeper) trackUndelegation(ctx context.Context, addr sdk.AccAddress, amt sdk.Coins) (sdk.Coins, sdk.Coins, error) {
 	acc := k.ak.GetAccount(ctx, addr)
 	if acc == nil {
 		// check if it's an x/accounts smart account
 		if k.ak.HasAccount(ctx, addr) {
-			return nil
+			return nil, nil, nil
 		}
-		return errorsmod.Wrapf(sdkerrors.ErrUnknownAddress, "account %s does not exist", addr)
+		return nil, nil, errorsmod.Wrapf(sdkerrors.ErrUnknownAddress, "account %s does not exist", addr)
 	}
 
 	vacc, ok := acc.(types.VestingAccount)
 	if ok {
 		// TODO: return error on account.TrackUndelegation
-		vacc.TrackUndelegation(amt)
+		vest, nonVest := vacc.TrackUndelegation(amt)
 		k.ak.SetAccount(ctx, acc)
+
+		return vest, nonVest, nil
 	}
 
-	return nil
+	return sdk.NewCoins(), amt, nil
 }
 
 // IterateTotalSupply iterates over the total supply calling the given cb (callback) function

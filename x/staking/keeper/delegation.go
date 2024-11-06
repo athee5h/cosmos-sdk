@@ -714,6 +714,8 @@ func (k Keeper) Delegate(
 		return math.LegacyZeroDec(), err
 	}
 
+	var delVest, delNonVest sdk.Coins
+
 	// if subtractAccount is true then we are
 	// performing a delegation and not a redelegation, thus the source tokens are
 	// all non bonded
@@ -739,7 +741,8 @@ func (k Keeper) Delegate(
 		}
 
 		coins := sdk.NewCoins(sdk.NewCoin(bondDenom, bondAmt))
-		if err := k.bankKeeper.DelegateCoinsFromAccountToModule(ctx, delAddr, sendName, coins); err != nil {
+		delVest, delNonVest, err = k.bankKeeper.DelegateCoinsFromAccountToModule(ctx, delAddr, sendName, coins)
+		if err != nil {
 			return math.LegacyDec{}, err
 		}
 	} else {
@@ -766,13 +769,31 @@ func (k Keeper) Delegate(
 		}
 	}
 
-	_, newShares, err = k.AddValidatorTokensAndShares(ctx, validator, bondAmt)
+	validator, newShares, err = k.AddValidatorTokensAndShares(ctx, validator, bondAmt)
 	if err != nil {
-		return newShares, err
+		return math.LegacyDec{}, err
+	}
+
+	effectiveDelegatorShares, err := k.calculateEffectiveDelegationShares(delVest, delNonVest, validator)
+	if err != nil {
+		return math.LegacyDec{}, err
+	}
+
+	if validator.EffectiveDelegatorShares.IsNil() {
+		validator.EffectiveDelegatorShares = effectiveDelegatorShares
+	} else {
+		validator.EffectiveDelegatorShares = validator.EffectiveDelegatorShares.Add(effectiveDelegatorShares)
 	}
 
 	// Update delegation
 	delegation.Shares = delegation.Shares.Add(newShares)
+
+	if delegation.EffectiveShares.IsNil() {
+		delegation.EffectiveShares = effectiveDelegatorShares
+	} else {
+		delegation.EffectiveShares = delegation.EffectiveShares.Add(effectiveDelegatorShares)
+	}
+
 	if err = k.SetDelegation(ctx, delegation); err != nil {
 		return newShares, err
 	}
@@ -783,6 +804,35 @@ func (k Keeper) Delegate(
 	}
 
 	return newShares, nil
+}
+
+// calculateEffectiveDelegationShares calculates the effective delegation shares
+// If the account is vesting, it multiplies the delegated shares by param vestingRewardMultiplier
+func (k Keeper) calculateEffectiveDelegationShares(
+	delegatedVesting, delegatedFree sdk.Coins, validator types.Validator,
+) (shares math.LegacyDec, err error) {
+
+	// TODO: make defaultVRM as a param
+	defaultVRM := math.LegacyNewDecWithPrec(3, 1)
+	effectiveShares := math.LegacyZeroDec()
+
+	if len(delegatedFree) > 0 {
+		nonVestingShares, err := validator.SharesFromTokens(delegatedFree[0].Amount)
+		if err != nil {
+			return math.LegacyZeroDec(), err
+		}
+		effectiveShares = effectiveShares.Add(nonVestingShares)
+	}
+
+	if len(delegatedVesting) > 0 {
+		vestingShares, err := validator.SharesFromTokens(delegatedVesting[0].Amount)
+		if err != nil {
+			return math.LegacyZeroDec(), err
+		}
+		effectiveShares = effectiveShares.Add(vestingShares.Mul(defaultVRM))
+	}
+
+	return effectiveShares, nil
 }
 
 // Unbond unbonds a particular delegation and perform associated store operations.
@@ -993,6 +1043,16 @@ func (k Keeper) CompleteUnbonding(ctx context.Context, delAddr sdk.AccAddress, v
 		return nil, err
 	}
 
+	validator, err := k.GetValidator(ctx, valAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	delegation, err := k.Delegations.Get(ctx, collections.Join(delAddr, valAddr))
+	if err != nil {
+		return nil, err
+	}
+
 	// loop through all the entries and complete unbonding mature entries
 	for i := 0; i < len(ubd.Entries); i++ {
 		entry := ubd.Entries[i]
@@ -1006,9 +1066,25 @@ func (k Keeper) CompleteUnbonding(ctx context.Context, delAddr sdk.AccAddress, v
 			// track undelegation only when remaining or truncated shares are non-zero
 			if !entry.Balance.IsZero() {
 				amt := sdk.NewCoin(bondDenom, entry.Balance)
-				if err := k.bankKeeper.UndelegateCoinsFromModuleToAccount(
-					ctx, types.NotBondedPoolName, delegatorAddress, sdk.NewCoins(amt),
-				); err != nil {
+				vest, nonVest, err := k.bankKeeper.UndelegateCoinsFromModuleToAccount(ctx, types.NotBondedPoolName, delegatorAddress, sdk.NewCoins(amt))
+				if err != nil {
+					return nil, err
+				}
+
+				effectiveDelegatorShares, err := k.calculateEffectiveDelegationShares(vest, nonVest, validator)
+				if err != nil {
+					return nil, err
+				}
+
+				// TODO: safesub
+				validator.EffectiveDelegatorShares = validator.EffectiveDelegatorShares.Sub(effectiveDelegatorShares)
+				if err = k.SetValidator(ctx, validator); err != nil {
+					return nil, err
+				}
+
+				// TODO: safesub
+				delegation.EffectiveShares = delegation.EffectiveShares.Sub(effectiveDelegatorShares)
+				if err = k.SetDelegation(ctx, delegation); err != nil {
 					return nil, err
 				}
 
