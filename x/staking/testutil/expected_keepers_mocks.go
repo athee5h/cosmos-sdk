@@ -146,11 +146,13 @@ func (mr *MockBankKeeperMockRecorder) BurnCoins(arg0, arg1, arg2 interface{}) *g
 }
 
 // DelegateCoinsFromAccountToModule mocks base method.
-func (m *MockBankKeeper) DelegateCoinsFromAccountToModule(ctx context.Context, senderAddr types1.AccAddress, recipientModule string, amt types1.Coins) error {
+func (m *MockBankKeeper) DelegateCoinsFromAccountToModule(ctx context.Context, senderAddr types1.AccAddress, recipientModule string, amt types1.Coins) (types1.Coins, types1.Coins, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DelegateCoinsFromAccountToModule", ctx, senderAddr, recipientModule, amt)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(types1.Coins)
+	ret1, _ := ret[1].(types1.Coins)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
 }
 
 // DelegateCoinsFromAccountToModule indicates an expected call of DelegateCoinsFromAccountToModule.
@@ -272,11 +274,13 @@ func (mr *MockBankKeeperMockRecorder) SpendableCoins(ctx, addr interface{}) *gom
 }
 
 // UndelegateCoinsFromModuleToAccount mocks base method.
-func (m *MockBankKeeper) UndelegateCoinsFromModuleToAccount(ctx context.Context, senderModule string, recipientAddr types1.AccAddress, amt types1.Coins) error {
+func (m *MockBankKeeper) UndelegateCoinsFromModuleToAccount(ctx context.Context, senderModule string, recipientAddr types1.AccAddress, amt types1.Coins) (types1.Coins, types1.Coins, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "UndelegateCoinsFromModuleToAccount", ctx, senderModule, recipientAddr, amt)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(types1.Coins)
+	ret1, _ := ret[1].(types1.Coins)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
 }
 
 // UndelegateCoinsFromModuleToAccount indicates an expected call of UndelegateCoinsFromModuleToAccount.
