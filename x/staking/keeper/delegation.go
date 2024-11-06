@@ -835,37 +835,6 @@ func (k Keeper) calculateEffectiveDelegationShares(
 	return effectiveShares, nil
 }
 
-// calculateEffectiveDelegationShares calculates the effective delegation shares
-// If the account is vesting, it multiplies the delegated shares by param vestingRewardMultiplier
-func (k Keeper) calculateEffectiveDelegationSharesUnbond(
-	delegatedVesting, delegatedFree sdk.Coins, validator types.Validator,
-) (shares math.LegacyDec, err error) {
-
-	// TODO: make defaultVRM as a param
-	defaultVRM := math.LegacyNewDecWithPrec(3, 1)
-	effectiveShares := math.LegacyZeroDec()
-
-	if len(delegatedFree) > 0 {
-		nonVestingShares, err := validator.SharesFromTokens(delegatedFree[0].Amount)
-		if err != nil {
-			return math.LegacyZeroDec(), err
-		}
-		// TODO: safesub
-		effectiveShares = effectiveShares.Sub(nonVestingShares)
-	}
-
-	if len(delegatedVesting) > 0 {
-		vestingShares, err := validator.SharesFromTokens(delegatedVesting[0].Amount)
-		if err != nil {
-			return math.LegacyZeroDec(), err
-		}
-		// TODO: safesub
-		effectiveShares = effectiveShares.Sub(vestingShares.Mul(defaultVRM))
-	}
-
-	return effectiveShares, nil
-}
-
 // Unbond unbonds a particular delegation and perform associated store operations.
 func (k Keeper) Unbond(
 	ctx context.Context, delAddr sdk.AccAddress, valAddr sdk.ValAddress, shares math.LegacyDec,
