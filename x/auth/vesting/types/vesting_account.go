@@ -132,7 +132,7 @@ func (bva *BaseVestingAccount) TrackUndelegation(amount sdk.Coins) (sdk.Coins, s
 		}
 	}
 
-	return xCoins, yCoins
+	return yCoins, xCoins
 }
 
 // GetOriginalVesting returns a vesting account's original vesting amount

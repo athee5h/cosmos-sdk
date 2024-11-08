@@ -797,6 +797,10 @@ func (k Keeper) Delegate(
 		validator.EffectiveDelegatorShares = validator.EffectiveDelegatorShares.Add(effectiveDelegatorShares)
 	}
 
+	if err = k.SetValidator(ctx, validator); err != nil {
+		return math.LegacyDec{}, err
+	}
+
 	// Update delegation
 	delegation.Shares = delegation.Shares.Add(newShares)
 
