@@ -720,6 +720,14 @@ func (k Keeper) Delegate(
 
 	delVest, delNonVest := sdk.NewCoins(), sdk.NewCoins(sdk.NewCoin(bondDenom, bondAmt))
 
+	coins := sdk.NewCoins(sdk.NewCoin(bondDenom, bondAmt))
+	acc := k.authKeeper.GetAccount(ctx, delAddr)
+	if acc == nil {
+		return math.LegacyZeroDec(), errorsmod.Wrapf(sdkerrors.ErrUnknownAddress, "account %s does not exist", delAddr)
+	}
+
+	vacc, isVestingAccount := acc.(types.VestingAccount)
+
 	// if subtractAccount is true then we are
 	// performing a delegation and not a redelegation, thus the source tokens are
 	// all non bonded
@@ -739,17 +747,9 @@ func (k Keeper) Delegate(
 			return math.LegacyZeroDec(), fmt.Errorf("invalid validator status: %v", validator.Status)
 		}
 
-		coins := sdk.NewCoins(sdk.NewCoin(bondDenom, bondAmt))
-
-		acc := k.authKeeper.GetAccount(ctx, delAddr)
-		if acc == nil {
-			return math.LegacyZeroDec(), errorsmod.Wrapf(sdkerrors.ErrUnknownAddress, "account %s does not exist", delAddr)
-		}
-
 		balances := k.bankKeeper.GetAllBalances(ctx, delAddr)
 
-		vacc, ok := acc.(types.VestingAccount)
-		if ok {
+		if isVestingAccount {
 			delVest, delNonVest = vacc.TrackDelegation(k.HeaderService.HeaderInfo(ctx).Time, balances, coins)
 		}
 
@@ -778,6 +778,12 @@ func (k Keeper) Delegate(
 			}
 		default:
 			return math.LegacyZeroDec(), fmt.Errorf("unknown token source bond status: %v", tokenSrc)
+		}
+
+		// in case of redelegation we need to track how many vesting, non-vesting tokens are moving to
+		// another validator, they're needed in calculating effective delegation shares.
+		if isVestingAccount {
+			delVest, delNonVest = vacc.TrackUndelegation(coins)
 		}
 	}
 
